@@ -1,0 +1,17 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "none",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "outDir": "dist-renderer",
+    "rootDir": "src/ui/renderer",
+    "strict": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "declaration": false,
+    "sourceMap": false,
+    "noImplicitAny": true,
+    "strictNullChecks": true
+  },
+  "include": ["src/ui/renderer/renderer.ts"]
+}

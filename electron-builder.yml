@@ -1,0 +1,40 @@
+appId: com.bdo.assistant
+productName: BDO Assistant
+directories:
+  output: dist-installer
+  buildResources: ui/build
+files:
+  - dist/**/*
+  - dist-ui/**/*
+  - dist-renderer/**/*
+  - package.json
+  - node_modules/**/*
+  - "!**/*.map"
+  - "!node_modules/electron/**/*"
+  - "!node_modules/electron-builder/**/*"
+  - "!node_modules/sharp/**/*"
+  - "!node_modules/@img/**/*"
+  - "!node_modules/typescript/**/*"
+  - "!node_modules/tsx/**/*"
+extraResources:
+  - from: data
+    to: data
+    filter:
+      - "**/*"
+  - from: ui/build/wallpaper.jpg
+    to: wallpaper.jpg
+    filter:
+      - "**/*"
+asar: true
+asarUnpack:
+  - "**/playwright/**"
+  - "**/playwright-core/**"
+win:
+  target: nsis
+  icon: ui/build/icon.ico
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  shortcutName: BDO Assistant

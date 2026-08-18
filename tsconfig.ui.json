@@ -1,0 +1,21 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "lib": ["ES2022"],
+    "outDir": "dist-ui",
+    "rootDir": "src/ui",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "declaration": false,
+    "sourceMap": false,
+    "noImplicitAny": true,
+    "strictNullChecks": true,
+    "types": ["node"]
+  },
+  "include": ["src/ui/main.ts", "src/ui/preload.ts"]
+}

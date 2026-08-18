@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:" />
+  <title>BDO Assistant</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div id="bg-layer"></div>
+  <div id="bg-overlay"></div>
+
+  <header id="app-header">
+    <div class="brand">
+      <span class="logo">🎮</span>
+      <h1>BDO Assistant</h1>
+      <span class="subtitle">garmoth.com + Ollama</span>
+    </div>
+    <div class="header-actions">
+      <label class="rerank-picker">
+        rerank:
+        <select id="rerank-select">
+          <option value="judge">judge</option>
+          <option value="mmr">mmr</option>
+          <option value="none">none</option>
+        </select>
+      </label>
+      <button id="scrape-btn" class="icon-btn" title="Re-scrapear garmoth.com y re-indexar">🔄 Re-scrapear</button>
+      <button id="stats-btn" class="icon-btn" title="Estadísticas del índice">📊 Stats</button>
+    </div>
+  </header>
+
+  <main id="chat-area">
+    <div id="welcome" class="welcome">
+      <h2>¿En qué te ayudo, aventurero?</h2>
+      <p>Pregunta sobre clases, gear, eventos, cupones o guías de Black Desert Online.</p>
+      <div class="examples">
+        <button class="example">¿Qué eventos hay activos ahora?</button>
+        <button class="example">¿Cómo funcionan las Dream Horses?</button>
+        <button class="example">¿Qué es la Dehkia's Lantern?</button>
+      </div>
+    </div>
+    <div id="messages"></div>
+  </main>
+
+  <footer id="input-area">
+    <textarea
+      id="question-input"
+      placeholder="Escribe tu pregunta sobre BDO… (Enter para enviar, Shift+Enter para salto de línea)"
+      rows="1"
+      autofocus
+    ></textarea>
+    <button id="send-btn" title="Enviar">➤</button>
+  </footer>
+
+  <!-- Modal de estadísticas -->
+  <div id="stats-modal" class="modal hidden">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2>📊 Estadísticas del índice</h2>
+        <button id="stats-close" class="icon-btn">✕</button>
+      </div>
+      <div id="stats-body" class="modal-body">Cargando…</div>
+    </div>
+  </div>
+
+  <!-- Toast de progreso de scrape -->
+  <div id="scrape-toast" class="toast hidden">
+    <div class="toast-header">
+      <span id="toast-title">🔄 Scrapeando garmoth.com…</span>
+      <button id="toast-cancel" class="toast-cancel">Cancelar</button>
+    </div>
+    <div id="toast-body" class="toast-body"></div>
+  </div>
+
+  <script src="marked.umd.js"></script>
+  <script src="renderer.js"></script>
+</body>
+</html>

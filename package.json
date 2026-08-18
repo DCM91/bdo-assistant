@@ -1,0 +1,45 @@
+{
+  "name": "bdo-assistant",
+  "version": "2.0.0",
+  "description": "Asistente local de Black Desert Online con datos de garmoth.com + Ollama",
+  "main": "dist-ui/main.js",
+  "scripts": {
+    "clean": "node -e \"const fs=require('fs');for (const d of ['dist','dist-ui','dist-renderer','dist-installer']) fs.rmSync(d,{recursive:true,force:true});\"",
+    "clean:rag": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
+    "clean:ui": "node -e \"const fs=require('fs');for (const d of ['dist-ui','dist-renderer','dist-installer']) fs.rmSync(d,{recursive:true,force:true});\"",
+    "prebuild": "npm run clean:rag",
+    "build": "tsc",
+    "prebuild:ui": "npm run clean:ui",
+    "build:ui": "tsc -p tsconfig.ui.json && tsc -p tsconfig.renderer.json && node scripts/copy-renderer-assets.js",
+    "wallpaper": "node scripts/copy-wallpaper.js",
+    "icon": "node scripts/generate-icon.js",
+    "ui:dev": "npm run build && npm run build:ui && electron .",
+    "preui:pack": "npm run clean",
+    "ui:pack": "npm run build && npm run build:ui && npm run wallpaper && npm run icon && electron-builder --win nsis --publish never",
+    "test": "tsx --test tests/**/*.test.ts"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "chalk": "^6.0.0",
+    "cheerio": "^1.2.0",
+    "marked": "^18.0.7",
+    "ora": "^9.4.1",
+    "playwright": "^1.62.0"
+  },
+  "devDependencies": {
+    "@types/electron": "^1.4.38",
+    "@types/node": "^26.1.2",
+    "electron": "^43.2.0",
+    "electron-builder": "^26.15.3",
+    "png-to-ico": "^3.0.2",
+    "sharp": "^0.35.3",
+    "tsx": "^4.23.1",
+    "typescript": "^5.9.3"
+  }
+}

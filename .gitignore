@@ -1,0 +1,13 @@
+node_modules/
+dist/
+dist-ui/
+dist-renderer/
+dist-installer/
+ui/build/
+data/profile/
+data/scraped/
+data/embeddings.bin
+data/index.json
+data/index.json.v1.bak
+tmp_profile/
+*.log
