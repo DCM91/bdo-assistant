@@ -1,22 +1,19 @@
 import { app, BrowserWindow, ipcMain, shell } from 'electron';
 import * as path from 'path';
-import { existsSync, readFileSync, mkdirSync, copyFileSync } from 'fs';
+import { existsSync, readFileSync, mkdirSync } from 'fs';
 
 // ANTES de cargar el RAG: en la app empaquetada, data/ vive en userData para que
-// el re-scraping no se pierda al instalar actualizaciones. Sembramos desde
-// resourcesPath la primera vez.
+// el re-scraping no se pierda al instalar actualizaciones. NO sembramos desde
+// resourcesPath: el instalador no envía el índice scrapeado (es contenido con
+// copyright de terceros). El usuario debe ejecutar /scrape en el primer arranque
+// para generar su propio índice local. Ver GOVERNANCE.md y README.md.
 if (app.isPackaged) {
   const userDataDir = path.join(app.getPath('userData'), 'data');
-  const seedDir = path.join(process.resourcesPath, 'data');
   if (!existsSync(userDataDir)) {
     try {
       mkdirSync(userDataDir, { recursive: true });
-      for (const f of ['index.json', 'embeddings.bin']) {
-        const src = path.join(seedDir, f);
-        if (existsSync(src)) copyFileSync(src, path.join(userDataDir, f));
-      }
     } catch {
-      /* sin seed: el primer scrape generará el índice */
+      /* el primer scrape la creará si falla */
     }
   }
   process.env.BDO_DATA_DIR = userDataDir;

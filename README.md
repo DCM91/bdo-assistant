@@ -136,8 +136,30 @@ Keys should be in `dot.case` and identical across the three locales.
 
 ## Legal
 
-Unofficial fan project. Not affiliated with, endorsed by, or sponsored by Pearl Abyss, Kakao Games, or garmoth.com. All scraped content is the property of its respective owners.
+### Trademarks
+
+- **Black Desert Online** is a registered trademark of **Pearl Abyss Corp.**
+- **garmoth.com** is operated by third parties and is not affiliated with Pearl Abyss.
+- All other brand names and trademarks mentioned in this project are the property of their respective owners.
+
+Use of these names in this project is **nominative fair use** for the purpose of identifying and describing the game the tool supports. This project is **not affiliated with, endorsed by, sponsored by, or approved by** Pearl Abyss, Kakao Games, garmoth.com, or any other rights holder.
+
+### User responsibility
+
+- The user is solely responsible for complying with the **Terms of Service** of any website they scrape through this tool. Web scraping may be restricted or prohibited by the target sites.
+- The tool is provided for **personal, non-commercial, educational use**. Do not use it for commercial purposes.
+- The user assumes all legal responsibility for any use of scraped data.
+
+### No redistribution of scraped data
+
+The installer intentionally **does not ship** any scraped content or pre-built embeddings index. Every user generates their own index locally on first run via the in-app `/scrape` action. This keeps the project's distribution free of third-party copyrighted content.
+
+If you wish to share your own index with yourself on another machine, that's your data and your responsibility.
 
 ## License
 
 [MIT](LICENSE) © 2026 [DCM91](https://github.com/DCM91)
+
+## Governance
+
+This project follows a **BDFL (Benevolent Dictator For Life)** model. See [GOVERNANCE.md](GOVERNANCE.md) for the full policy on maintainers, co-maintainers, and decision-making.

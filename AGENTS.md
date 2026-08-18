@@ -69,3 +69,17 @@ Modal nuevo (botón `🔗 Páginas` en el header) que lista todas las URLs index
 - `store.removeByUrl(url)` borra los chunks de esa URL vía `writeIndex` (atómico).
 - IPC `pages:list`, `pages:delete`, `pages:export` (CSV).
 - Renderer: tabla con búsqueda por título/URL, eliminación con confirmación, exportación CSV (descarga con `<a download>`).
+
+## Governance & legal
+
+El proyecto sigue un modelo **BDFL** (DCM91), MIT, sin ánimo de lucro. Documentos vinculantes:
+
+- `README.md` — punto de entrada público, build, comandos, disclaimer.
+- `LICENSE` — MIT.
+- `GOVERNANCE.md` — quién decide qué, cómo añadir co-maintainers, forking si el BDFL desaparece.
+- `CONTRIBUTING.md` — qué contribuciones se aceptan y cuáles no.
+- `CODE_OF_CONDUCT.md` — Contributor Covenant v2.1.
+- `SECURITY.md` — cómo reportar vulnerabilidades.
+- `.github/ISSUE_TEMPLATE/` + `.github/PULL_REQUEST_TEMPLATE.md` — canalizan lo que llega a GitHub.
+
+**Política de "sin redistribución de datos scrapeados"**: el instalador **no envía** `index.json` ni `embeddings.bin` (eliminado de `extraResources` en `electron-builder.yml`). El usuario genera su propio índice en el primer scrape. Esto evita redistribuir contenido derivado de garmoth.com / Pearl Abyss en el binario que distribuimos. `src/ui/main.ts` se limita a crear `userData/data` vacío.
