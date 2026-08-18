@@ -2,7 +2,7 @@
 <html lang="es">
 <head>
   <meta charset="UTF-8" />
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; object-src 'none'; base-uri 'none'" />
   <title>BDO Assistant</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
@@ -13,31 +13,40 @@
   <header id="app-header">
     <div class="brand">
       <span class="logo">🎮</span>
-      <h1>BDO Assistant</h1>
-      <span class="subtitle">garmoth.com + Ollama</span>
+      <h1 data-i18n="header.title">BDO Assistant</h1>
+      <span class="subtitle" data-i18n="header.subtitle">garmoth.com + Ollama</span>
     </div>
     <div class="header-actions">
       <label class="rerank-picker">
-        rerank:
+        <span data-i18n="header.rerankLabel">rerank</span>:
         <select id="rerank-select">
           <option value="judge">judge</option>
           <option value="mmr">mmr</option>
           <option value="none">none</option>
         </select>
       </label>
-      <button id="scrape-btn" class="icon-btn" title="Re-scrapear garmoth.com y re-indexar">🔄 Re-scrapear</button>
-      <button id="stats-btn" class="icon-btn" title="Estadísticas del índice">📊 Stats</button>
+      <label class="locale-picker">
+        <span data-i18n="header.localeLabel">idioma</span>:
+        <select id="locale-select">
+          <option value="es">Español</option>
+          <option value="en">English</option>
+          <option value="pt">Português</option>
+        </select>
+      </label>
+      <button id="links-btn" class="icon-btn" data-i18n="header.linksButton" data-i18n-title="header.linksTitle" title="Páginas indexadas">🔗 Páginas</button>
+      <button id="scrape-btn" class="icon-btn" data-i18n="header.scrapeButton" data-i18n-title="header.scrapeTitle" title="Re-scrapear y re-indexar">🔄 Re-scrapear</button>
+      <button id="stats-btn" class="icon-btn" data-i18n="header.statsButton" data-i18n-title="header.statsTitle" title="Estadísticas del índice">📊 Stats</button>
     </div>
   </header>
 
   <main id="chat-area">
     <div id="welcome" class="welcome">
-      <h2>¿En qué te ayudo, aventurero?</h2>
-      <p>Pregunta sobre clases, gear, eventos, cupones o guías de Black Desert Online.</p>
+      <h2 data-i18n="welcome.title">¿En qué te ayudo, aventurero?</h2>
+      <p data-i18n="welcome.subtitle">Pregunta sobre clases, gear, eventos, cupones o guías de Black Desert Online.</p>
       <div class="examples">
-        <button class="example">¿Qué eventos hay activos ahora?</button>
-        <button class="example">¿Cómo funcionan las Dream Horses?</button>
-        <button class="example">¿Qué es la Dehkia's Lantern?</button>
+        <button class="example" data-i18n="welcome.example1">¿Qué eventos hay activos ahora?</button>
+        <button class="example" data-i18n="welcome.example2">¿Cómo funcionan las Dream Horses?</button>
+        <button class="example" data-i18n="welcome.example3">¿Qué es la Dehkia's Lantern?</button>
       </div>
     </div>
     <div id="messages"></div>
@@ -46,29 +55,63 @@
   <footer id="input-area">
     <textarea
       id="question-input"
+      data-i18n-placeholder="input.placeholder"
       placeholder="Escribe tu pregunta sobre BDO… (Enter para enviar, Shift+Enter para salto de línea)"
       rows="1"
       autofocus
     ></textarea>
-    <button id="send-btn" title="Enviar">➤</button>
+    <button id="send-btn" data-i18n-title="input.sendTitle" title="Enviar">➤</button>
   </footer>
 
   <!-- Modal de estadísticas -->
   <div id="stats-modal" class="modal hidden">
     <div class="modal-content">
       <div class="modal-header">
-        <h2>📊 Estadísticas del índice</h2>
-        <button id="stats-close" class="icon-btn">✕</button>
+        <h2 data-i18n="stats.title">📊 Estadísticas del índice</h2>
+        <button id="stats-close" class="icon-btn" data-i18n-title="stats.closeTitle" title="Cerrar">✕</button>
       </div>
-      <div id="stats-body" class="modal-body">Cargando…</div>
+      <div id="stats-body" class="modal-body" data-i18n="stats.loading">Cargando…</div>
+    </div>
+  </div>
+
+  <!-- Modal de páginas indexadas -->
+  <div id="pages-modal" class="modal hidden">
+    <div class="modal-content modal-content-wide">
+      <div class="modal-header">
+        <h2 data-i18n="pages.title">🔗 Páginas indexadas</h2>
+        <button id="pages-close" class="icon-btn" data-i18n-title="stats.closeTitle" title="Cerrar">✕</button>
+      </div>
+      <div class="modal-toolbar">
+        <input id="pages-search" type="search" data-i18n-placeholder="pages.searchPlaceholder" placeholder="Buscar por título o URL…" />
+        <button id="pages-export" class="primary-btn" data-i18n="pages.export">Exportar CSV</button>
+      </div>
+      <div id="pages-body" class="modal-body">
+        <table id="pages-table" class="pages-table hidden">
+          <thead>
+            <tr>
+              <th class="col-num">#</th>
+              <th data-i18n="pages.colTitle">Título</th>
+              <th data-i18n="pages.colUrl">URL</th>
+              <th data-i18n="pages.colDate">Fecha</th>
+              <th data-i18n="pages.colSource">Fuente</th>
+              <th class="col-num" data-i18n="pages.colChunks">Chunks</th>
+              <th data-i18n="pages.colActions">Acciones</th>
+            </tr>
+          </thead>
+          <tbody id="pages-tbody"></tbody>
+        </table>
+        <div id="pages-empty" class="empty-state hidden" data-i18n="pages.empty">No hay páginas indexadas.</div>
+        <div id="pages-no-results" class="empty-state hidden" data-i18n="pages.noResults">Ningún resultado para tu búsqueda.</div>
+        <div id="pages-error" class="empty-state hidden"></div>
+      </div>
     </div>
   </div>
 
   <!-- Toast de progreso de scrape -->
   <div id="scrape-toast" class="toast hidden">
     <div class="toast-header">
-      <span id="toast-title">🔄 Scrapeando garmoth.com…</span>
-      <button id="toast-cancel" class="toast-cancel">Cancelar</button>
+      <span id="toast-title" data-i18n="scrape.title">🔄 Scrapeando garmoth.com…</span>
+      <button id="toast-cancel" class="toast-cancel" data-i18n="scrape.cancel">Cancelar</button>
     </div>
     <div id="toast-body" class="toast-body"></div>
   </div>

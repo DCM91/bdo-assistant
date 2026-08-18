@@ -60,3 +60,59 @@ test('slugify genera nombres de archivo seguros', () => {
   assert.equal(slugify('https://garmoth.com/news?id=123&lang=es'), 'garmoth_com_news_id_123_lang_es');
   assert.ok(slugify('https://garmoth.com/' + 'a'.repeat(200)).length <= 80);
 });
+
+test('splitSentences parte por saltos de línea / párrafos', () => {
+  const s = splitSentences('Párrafo uno. Párrafo uno sigue.\n\nPárrafo dos.\nTercera línea del dos.');
+  assert.ok(s.includes('Párrafo uno.'), `faltó primera: ${JSON.stringify(s)}`);
+  assert.ok(s.includes('Párrafo uno sigue.'));
+  assert.ok(s.includes('Párrafo dos.'));
+  assert.ok(s.includes('Tercera línea del dos.'));
+  assert.equal(s.length, 4);
+});
+
+test('splitSentences acepta CRLF', () => {
+  const s = splitSentences('Línea uno.\r\n\r\nLínea dos.\r\n');
+  assert.ok(s.includes('Línea uno.'));
+  assert.ok(s.includes('Línea dos.'));
+});
+
+test('splitSentences no produce un único "sentence" gigante sin puntuación', () => {
+  // Sin ningún ". ! ?" la nueva implementación parte por newlines y devuelve
+  // cada párrafo como una frase independiente (en lugar del bug anterior
+  // donde `\s+` colapsaba todo en una sola frase de N caracteres).
+  const paragraphs = [
+    'List item alpha con varias palabras',
+    'List item beta con más texto',
+    'List item gamma con aún más',
+  ].join('\n');
+  const s = splitSentences(paragraphs);
+  assert.equal(s.length, 3);
+});
+
+test('chunkBySentences hard-split cuando una sola frase excede maxChunkChars', () => {
+  const long = 'palabra '.repeat(800).trim(); // ~6400 chars, sin puntuación
+  const chunks = chunkBySentences(long, {
+    targetWords: 100_000,
+    overlapSentences: 0,
+    minChunkChars: 0,
+    maxChunkChars: 2000,
+  });
+  assert.ok(chunks.length >= 3, `esperaba >=3 hard-chunks, obtuve ${chunks.length}`);
+  for (const c of chunks) {
+    assert.ok(c.length <= 2000, `chunk ${c.length} caracteres excede el límite`);
+  }
+});
+
+test('chunkBySentences acepta CRLF en el input', () => {
+  const chunks = chunkBySentences('Uno.\r\n\r\nDos.\r\nTres.', {
+    targetWords: 4,
+    overlapSentences: 0,
+    minChunkChars: 0,
+  });
+  for (const c of chunks) assert.ok(c.length > 0);
+});
+
+test('chunkBySentences con texto vacío devuelve []', () => {
+  assert.deepEqual(chunkBySentences('', {}), []);
+  assert.deepEqual(chunkBySentences('   \n\n  ', {}), []);
+});

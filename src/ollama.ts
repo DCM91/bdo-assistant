@@ -35,7 +35,11 @@ async function post<T>(endpoint: string, body: unknown): Promise<T> {
     const text = await response.text().catch(() => '');
     throw new OllamaUnavailableError(`Ollama respondió ${response.status} en ${endpoint}: ${text.substring(0, 200)}`);
   }
-  return (await response.json()) as T;
+  const json = (await response.json()) as T & { error?: string };
+  if (json && typeof json === 'object' && 'error' in json && json.error) {
+    throw new OllamaUnavailableError(`Ollama error en ${endpoint}: ${String(json.error)}`);
+  }
+  return json;
 }
 
 /** Embedding de un texto individual. */
@@ -139,13 +143,18 @@ export async function chatStream(
         const line = buffer.slice(0, newlineIdx).trim();
         buffer = buffer.slice(newlineIdx + 1);
         if (!line) continue;
+        let obj: { error?: string; message?: { content?: string }; done?: boolean };
         try {
-          const obj = JSON.parse(line) as { message?: { content?: string }; done?: boolean };
-          const content = obj.message?.content;
-          if (content) onToken(content);
+          obj = JSON.parse(line) as typeof obj;
         } catch {
           // Línea parcial o no-JSON: ignorar (el modelo a veces manda keep-alives)
+          continue;
         }
+        if (obj.error) {
+          throw new OllamaUnavailableError(`Ollama stream error: ${obj.error}`);
+        }
+        const content = obj.message?.content;
+        if (content) onToken(content);
       }
     }
 
@@ -153,14 +162,26 @@ export async function chatStream(
     const tail = buffer.trim();
     if (tail) {
       try {
-        const obj = JSON.parse(tail) as { message?: { content?: string } };
+        const obj = JSON.parse(tail) as { error?: string; message?: { content?: string } };
+        if (obj.error) {
+          throw new OllamaUnavailableError(`Ollama stream error: ${obj.error}`);
+        }
         if (obj.message?.content) onToken(obj.message.content);
-      } catch {
-        /* ignorar */
+      } catch (e) {
+        if (e instanceof OllamaUnavailableError) throw e;
+        /* ignorar línea final no-JSON */
       }
     }
+  } catch (e) {
+    if (e instanceof OllamaUnavailableError) throw e;
+    const msg = e instanceof Error ? e.message : String(e);
+    throw new OllamaUnavailableError(`Ollama stream interrumpido: ${msg}`);
   } finally {
-    reader.releaseLock();
+    try {
+      reader.releaseLock();
+    } catch {
+      /* ya liberado */
+    }
   }
 }
 
@@ -206,7 +227,8 @@ export async function judgeRelevance(question: string, docs: string[]): Promise<
   return parseScores(raw, docs.length);
 }
 
-function parseScores(raw: string, expected: number): number[] | null {
+/** @internal — exportada para tests. */
+export function parseScores(raw: string, expected: number): number[] | null {
   // Buscar el primer objeto JSON que contenga "scores"
   const match = raw.match(/\{[^{}]*"scores"[^{}]*\}/s);
   if (!match) return null;

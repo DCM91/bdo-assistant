@@ -54,10 +54,11 @@ export async function indexAll(reindex = false): Promise<IndexResult> {
   }
 
   const indexedUrls = store.getIndexedUrls();
-  // Set adicional de URLs canónicas para deduplicación (páginas scrapeadas con
-  // distinta URL literal pero mismo contenido, p.ej. con/sin trailing slash).
+  // Set adicional de URLs canónicas para deduplicación. Usamos el canonical_url
+  // ya almacenado (los chunks nuevos lo llevan; los legacy se rellenan en
+  // `Store.normalizeChunks`).
   const indexedCanonical = new Set<string>(
-    store.getAllChunks().map((c) => canonicalUrl(c.url)),
+    store.getAllChunks().map((c) => c.canonical_url),
   );
   if (indexedUrls.size > 0) {
     console.log(`  ${store.count} chunks ya indexados (${indexedUrls.size} URLs)`);
@@ -68,11 +69,25 @@ export async function indexAll(reindex = false): Promise<IndexResult> {
   let skipped = 0;
 
   for (const file of files) {
-    const page = JSON.parse(
-      readFileSync(path.join(scrapedDir, file), 'utf-8'),
-    ) as ScrapedPage;
+    const fullPath = path.join(scrapedDir, file);
 
-    if (indexedUrls.has(page.url) || indexedCanonical.has(canonicalUrl(page.url))) {
+    let page: ScrapedPage;
+    try {
+      page = JSON.parse(readFileSync(fullPath, 'utf-8')) as ScrapedPage;
+    } catch (e) {
+      console.log(`  ✗ Saltando ${file} (JSON inválido: ${e instanceof Error ? e.message : e})`);
+      skipped++;
+      continue;
+    }
+
+    if (!page.url || !page.scraped_at) {
+      console.log(`  ✗ Saltando ${file} (sin url o scraped_at)`);
+      skipped++;
+      continue;
+    }
+
+    const pageCanonical = canonicalUrl(page.url);
+    if (indexedUrls.has(page.url) || indexedCanonical.has(pageCanonical)) {
       skipped++;
       continue;
     }
@@ -103,22 +118,22 @@ export async function indexAll(reindex = false): Promise<IndexResult> {
         const result = await embedBatch(batch);
         embeddings.push(...result);
       } catch (e) {
-        console.log(`\n    ✗ Error en lote ${i / batchSize + 1}: ${e instanceof Error ? e.message : e}`);
+        console.log(
+          `\n    ✗ Error en lote ${Math.floor(i / batchSize) + 1}: ${e instanceof Error ? e.message : e}`,
+        );
         failed = true;
         break;
       }
     }
 
     if (failed) {
-      // Guardar lo que haya y parar (Ollama caído, etc.)
-      if (embeddings.length > 0) {
-        const chunks = buildChunks(page, texts.slice(0, embeddings.length));
-        store.appendChunks(chunks, embeddings);
-        store.reload();
-        totalNew += chunks.length;
-      }
-      console.log('    ⚠ Indexado parcial guardado. Revisa Ollama y reintenta.');
-      break;
+      // NO persistimos embeddings parciales: si lo hiciéramos, esta página
+      // quedaría marcada como indexada y sus chunks restantes nunca se procesarían.
+      console.log(
+        '    ⚠ Saltando esta página. Embeddings no persistidos. Reindex con --reindex para reintentar.',
+      );
+      skipped++;
+      continue;
     }
 
     const chunks = buildChunks(page, texts);
@@ -127,7 +142,7 @@ export async function indexAll(reindex = false): Promise<IndexResult> {
     totalNew += chunks.length;
     processed++;
     indexedUrls.add(page.url);
-    indexedCanonical.add(canonicalUrl(page.url));
+    indexedCanonical.add(chunks[0].canonical_url);
   }
 
   console.log(

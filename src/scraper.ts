@@ -1,6 +1,6 @@
 import { chromium, type Browser, type Page } from 'playwright';
 import { spawn, execSync, type ChildProcess } from 'child_process';
-import { existsSync, mkdirSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, writeFileSync, renameSync } from 'fs';
 import * as path from 'path';
 import * as cheerio from 'cheerio';
 import { config } from './config';
@@ -16,6 +16,29 @@ if (!existsSync(DATA_DIR)) {
 
 const { chromePath: CHROME_PATH, cdpPort: CDP_PORT, delayMs: DELAY_MS, sites: SITES } =
   config.scraper;
+
+/**
+ * Referencia al Chrome que hemos lanzado nosotros. La conservamos para matarlo
+ * por PID; nunca usamos `taskkill /IM chrome.exe` porque cierra el navegador
+ * personal del usuario y el de cualquier otra herramienta del sistema.
+ */
+let chromeProc: ChildProcess | null = null;
+
+function killChrome(): void {
+  const proc = chromeProc;
+  chromeProc = null;
+  if (!proc || proc.pid === undefined) return;
+  if (proc.exitCode !== null) return;
+  try {
+    if (process.platform === 'win32') {
+      execSync(`taskkill /pid ${proc.pid} /T /F`, { stdio: 'ignore' });
+    } else {
+      proc.kill('SIGTERM');
+    }
+  } catch {
+    /* ya estaba muerto */
+  }
+}
 
 /** Sitio a scrapear (espejo de config.scraper.sites con tipos). */
 interface Site {
@@ -71,10 +94,12 @@ function extractLinks($: cheerio.CheerioAPI, currentUrl: string, baseUrl: string
 }
 
 function launchChrome(): ChildProcess {
-  try {
-    execSync('taskkill /F /IM chrome.exe /T 2>nul', { stdio: 'ignore' });
-  } catch {
-    /* no chrome running */
+  // Liberar el lock del perfil si nuestro Chrome anterior quedó vivo por una
+  // cancelación previa (matamos por PID local, no por nombre de imagen).
+  killChrome();
+
+  if (!existsSync(CHROME_PATH)) {
+    throw new Error(`Chrome no encontrado en ${CHROME_PATH}. Ajusta config.scraper.chromePath.`);
   }
 
   const proc = spawn(
@@ -90,7 +115,11 @@ function launchChrome(): ChildProcess {
     { detached: true, stdio: 'ignore' },
   );
 
-  proc.unref();
+  proc.on('error', (e) => {
+    console.error(`[scraper] Chrome (pid=${proc.pid}) error: ${e.message}`);
+  });
+
+  chromeProc = proc;
   return proc;
 }
 
@@ -147,7 +176,7 @@ async function scrapePage(
     if (html.includes('Attention Required') || html.includes('Just a moment') || html.length < 3000) {
       await page.waitForTimeout(5000);
       const retryHtml = await page.content();
-      if (retryHtml.includes('Attention Required') || retryHtml.length < 3000) {
+      if (retryHtml.includes('Attention Required') || retryHtml.includes('Just a moment') || retryHtml.length < 3000) {
         console.log(`    ✗ [${site.id}] Cloudflare bloquea esta página`);
         return null;
       }
@@ -184,7 +213,10 @@ async function scrapePage(
 
     // Prefijo por sitio para evitar colisiones (ej: garmoth__index.json vs bdo__index.json)
     const filename = `${site.id}__${slugify(url)}.json`;
-    writeFileSync(path.join(DATA_DIR, filename), JSON.stringify(result, null, 2), 'utf-8');
+    const finalPath = path.join(DATA_DIR, filename);
+    const tmpPath = `${finalPath}.tmp`;
+    writeFileSync(tmpPath, JSON.stringify(result, null, 2), 'utf-8');
+    renameSync(tmpPath, finalPath);
 
     console.log(`    ✓ [${site.id}] ${bodyText.length} chars, ${links.length} links`);
     return { result, links };
@@ -246,16 +278,18 @@ export async function scrape(options: ScrapeOptions = {}): Promise<ScrapeResult>
   console.log(`   Tope por sitio: ${maxPages} páginas`);
   console.log('   (Se abrirá Chrome para evadir Cloudflare)\n');
 
-  launchChrome();
-  await sleep(3000);
-
-  const context = await connectToChrome();
-  const page = await context.newPage();
-
-  const bySite: Record<string, number> = {};
-  let total = 0;
+  let context: Browser | null = null;
 
   try {
+    launchChrome();
+    await sleep(3000);
+
+    context = await connectToChrome();
+    const page = await context.newPage();
+
+    const bySite: Record<string, number> = {};
+    let total = 0;
+
     for (const site of SITES as readonly Site[]) {
       console.log(`\n📡 [${site.id}] ${site.baseUrl}`);
       const { scraped } = await scrapeSite(page, site, maxPages);
@@ -263,18 +297,20 @@ export async function scrape(options: ScrapeOptions = {}): Promise<ScrapeResult>
       total += scraped;
       console.log(`   [${site.id}] ${scraped} páginas scrapeadas`);
     }
-  } finally {
-    await context.close();
-    try {
-      execSync('taskkill /F /IM chrome.exe /T 2>nul', { stdio: 'ignore' });
-    } catch {
-      /* ignore */
-    }
-  }
 
-  const breakdown = Object.entries(bySite).map(([k, v]) => `${k}: ${v}`).join(', ');
-  console.log(`\n✅ Scrape completado: ${total} páginas (${breakdown})`);
-  return { pages: total, bySite };
+    const breakdown = Object.entries(bySite).map(([k, v]) => `${k}: ${v}`).join(', ');
+    console.log(`\n✅ Scrape completado: ${total} páginas (${breakdown})`);
+    return { pages: total, bySite };
+  } finally {
+    if (context) {
+      try {
+        await context.close();
+      } catch (e) {
+        console.error(`[scraper] Error cerrando el navegador: ${e instanceof Error ? e.message : e}`);
+      }
+    }
+    killChrome();
+  }
 }
 
 if (require.main === module) {

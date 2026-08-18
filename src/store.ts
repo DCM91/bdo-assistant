@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync, openSync, closeSync, readSync, fstatSync, readdirSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync, renameSync, openSync, closeSync, readSync, fstatSync, readdirSync } from 'fs';
 import { config } from './config';
 import { IndexEmptyError, MigrationRequiredError, StoreCorruptedError } from './errors';
 import { cosineSimilarityRow, l2Norm } from './similarity';
@@ -13,6 +13,15 @@ export interface StoreStats {
   dims: number;
   /** Chunks desglosados por fuente (garmoth, bdo, ...). */
   bySource: Record<string, number>;
+}
+
+/** Página indexada (URL única con su metadato agregado) — para el modal de Páginas. */
+export interface IndexedPage {
+  url: string;
+  title: string;
+  source: ChunkSource;
+  scraped_at: string;
+  chunks: number;
 }
 
 const MAGIC = 0x454f4442; // "BDOE" little-endian
@@ -41,7 +50,14 @@ class Store {
       return;
     }
 
-    const raw = JSON.parse(readFileSync(indexFile, 'utf-8')) as unknown;
+    let raw: unknown;
+    try {
+      raw = JSON.parse(readFileSync(indexFile, 'utf-8'));
+    } catch (e) {
+      throw new StoreCorruptedError(
+        `data/index.json no se pudo parsear: ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
 
     // Formato v1: array plano con campo "embedding" por chunk
     if (Array.isArray(raw)) {
@@ -73,7 +89,9 @@ class Store {
 
     if (!existsSync(embeddingsFile)) {
       throw new StoreCorruptedError(
-        'index.json tiene ' + index.chunks.length + ' chunks pero no existe embeddings.bin. Ejecuta: npm run migrate',
+        'index.json tiene ' +
+          index.chunks.length +
+          ' chunks pero no existe embeddings.bin. Reindexa con: npx tsx src/indexer.ts --reindex',
       );
     }
 
@@ -81,16 +99,35 @@ class Store {
     try {
       const size = fstatSync(fd).size;
       const buffer = Buffer.alloc(size);
-      readSync(fd, buffer, 0, size, 0);
+      let bytesRead = 0;
+      while (bytesRead < size) {
+        const r = readSync(fd, buffer, bytesRead, size - bytesRead, bytesRead);
+        if (r === 0) break;
+        bytesRead += r;
+      }
+      if (bytesRead !== size) {
+        throw new StoreCorruptedError(`embeddings.bin: lectura incompleta (${bytesRead}/${size})`);
+      }
 
       if (size < HEADER_BYTES || buffer.readUInt32LE(0) !== MAGIC) {
         throw new StoreCorruptedError('embeddings.bin: cabecera inválida');
       }
+      const binVersion = buffer.readUInt32LE(4);
       const binDims = buffer.readUInt32LE(8);
       const binCount = buffer.readUInt32LE(12);
 
+      if (binVersion !== BIN_VERSION) {
+        throw new StoreCorruptedError(
+          `embeddings.bin: versión de bin ${binVersion} no soportada (esperada ${BIN_VERSION})`,
+        );
+      }
       if (binDims !== index.dims) {
         throw new StoreCorruptedError(`embeddings.bin dims=${binDims} pero index.json dims=${index.dims}`);
+      }
+      if (binDims !== config.ollama.embedDims) {
+        throw new StoreCorruptedError(
+          `embeddings.bin tiene dims=${binDims} pero config.ollama.embedDims=${config.ollama.embedDims}. Reindexa con --reindex.`,
+        );
       }
       if (binCount !== index.chunks.length) {
         throw new StoreCorruptedError(
@@ -159,6 +196,55 @@ class Store {
   }
 
   /**
+   * Lista de páginas únicas indexadas, agregadas por URL: cuenta de chunks,
+   * fuente (source) y fecha de scrape más reciente.
+   */
+  getIndexedPages(): IndexedPage[] {
+    this.ensureLoaded();
+    const byUrl = new Map<string, IndexedPage>();
+    for (const c of this.chunks) {
+      const prev = byUrl.get(c.url);
+      if (prev) {
+        prev.chunks++;
+        if (c.scraped_at > prev.scraped_at) prev.scraped_at = c.scraped_at;
+      } else {
+        byUrl.set(c.url, {
+          url: c.url,
+          title: c.title,
+          source: c.source,
+          scraped_at: c.scraped_at,
+          chunks: 1,
+        });
+      }
+    }
+    return Array.from(byUrl.values()).sort((a, b) => b.scraped_at.localeCompare(a.scraped_at));
+  }
+
+  /**
+   * Elimina todos los chunks de una URL del índice (atómico vía `writeIndex`).
+   * Devuelve el número de chunks eliminados. El archivo JSON scrapeado en disco
+   * no se modifica — el usuario decide cuándo borrarlo.
+   */
+  removeByUrl(url: string): number {
+    this.ensureLoaded();
+    const keep: Chunk[] = [];
+    let removed = 0;
+    for (const c of this.chunks) {
+      if (c.url === url) {
+        removed++;
+      } else {
+        keep.push(c);
+      }
+    }
+    if (removed === 0) return 0;
+    const keepEmbeddings = this.getAllEmbeddings().filter(
+      (_e, i) => this.chunks[i].url !== url,
+    );
+    this.writeIndex(keep, keepEmbeddings);
+    return removed;
+  }
+
+  /**
    * Puntúa todos los chunks contra el embedding de consulta.
    * Itera directamente sobre el Float32Array sin copias.
    */
@@ -179,66 +265,80 @@ class Store {
     return scored;
   }
 
+  /** Devuelve todos los embeddings actuales materializados como number[][]. Costoso: O(N·D). */
+  private getAllEmbeddings(): number[][] {
+    this.ensureLoaded();
+    const n = this.chunks.length;
+    const result: number[][] = new Array(n);
+    for (let i = 0; i < n; i++) {
+      result[i] = Array.from(this.getEmbedding(i));
+    }
+    return result;
+  }
+
   /**
-   * Añade chunks nuevos con sus embeddings: append binario + reescritura de index.json.
-   * Invalida la caché en memoria (hay que hacer reload).
+   * Escribe `embeddings.bin` + `index.json` de forma atómica vía `*.tmp` + `renameSync`.
+   * El commit son los dos `renameSync` finales; si el proceso muere entre ellos,
+   * `load()` siguiente detectará el desajuste count/dims y lanzará `StoreCorruptedError`.
+   */
+  private writeIndex(chunks: Chunk[], embeddings: number[][]): void {
+    if (chunks.length !== embeddings.length) {
+      throw new StoreCorruptedError('writeIndex: chunks y embeddings no coinciden');
+    }
+    const { indexFile, embeddingsFile } = config.paths;
+    const dims = this.dims;
+    const count = chunks.length;
+
+    const idxTmp = `${indexFile}.tmp`;
+    const binTmp = `${embeddingsFile}.tmp`;
+
+    const bin = Buffer.alloc(HEADER_BYTES + count * dims * 4);
+    bin.writeUInt32LE(MAGIC, 0);
+    bin.writeUInt32LE(BIN_VERSION, 4);
+    bin.writeUInt32LE(dims, 8);
+    bin.writeUInt32LE(count, 12);
+    let off = HEADER_BYTES;
+    for (const emb of embeddings) {
+      if (emb.length !== dims) {
+        throw new StoreCorruptedError(`Embedding con dims=${emb.length}, esperado ${dims}`);
+      }
+      for (let i = 0; i < dims; i++) {
+        bin.writeFloatLE(emb[i], off + i * 4);
+      }
+      off += dims * 4;
+    }
+    writeFileSync(binTmp, bin);
+    writeFileSync(idxTmp, JSON.stringify({ version: 2, dims, chunks }));
+    renameSync(binTmp, embeddingsFile);
+    renameSync(idxTmp, indexFile);
+
+    this.loaded = false;
+  }
+
+  /**
+   * Añade chunks nuevos con sus embeddings. Escritura atómica: hasta el commit
+   * (los dos `renameSync` finales), el contenido anterior permanece intacto.
    */
   appendChunks(newChunks: Chunk[], newEmbeddings: number[][]): void {
     if (newChunks.length !== newEmbeddings.length) {
       throw new StoreCorruptedError('appendChunks: chunks y embeddings no coinciden');
     }
     if (newChunks.length === 0) return;
-
     this.ensureLoaded();
 
-    const totalChunks = this.chunks.length + newChunks.length;
-    const dims = this.dims;
-
-    // Escribir embeddings.bin completo (antiguo + nuevo). Es O(total) pero
-    // binario puro: ~100 MB/s. Suficiente para volúmenes de scraping web.
-    const out = Buffer.alloc(HEADER_BYTES + totalChunks * dims * 4);
-    out.writeUInt32LE(MAGIC, 0);
-    out.writeUInt32LE(BIN_VERSION, 4);
-    out.writeUInt32LE(dims, 8);
-    out.writeUInt32LE(totalChunks, 12);
-
-    // Copiar embeddings existentes
-    const existing = Buffer.from(this.embeddings.buffer, this.embeddings.byteOffset, this.embeddings.length * 4);
-    existing.copy(out, HEADER_BYTES);
-
-    // Añadir los nuevos
-    let offset = HEADER_BYTES + this.embeddings.length * 4;
-    for (const emb of newEmbeddings) {
-      if (emb.length !== dims) {
-        throw new StoreCorruptedError(`Embedding con dims=${emb.length}, esperado ${dims}`);
-      }
-      for (let i = 0; i < dims; i++) {
-        out.writeFloatLE(emb[i], offset + i * 4);
-      }
-      offset += dims * 4;
-    }
-    writeFileSync(config.paths.embeddingsFile, out);
-
-    // Reescribir index.json con todos los chunks
-    const index: IndexFileV2 = {
-      version: 2,
-      dims,
-      chunks: [...this.chunks, ...newChunks],
-    };
-    writeFileSync(config.paths.indexFile, JSON.stringify(index), 'utf-8');
-
-    this.loaded = false;
+    const existing = this.getAllEmbeddings();
+    this.writeIndex([...this.chunks, ...newChunks], [...existing, ...newEmbeddings]);
   }
 
-  /** Reemplaza todo el índice (usado por --reindex). */
+  /**
+   * Reemplaza todo el índice (usado por --reindex). Atómico: la versión previa
+   * permanece hasta el commit final; nunca se truncan archivos en sitio.
+   */
   replaceAll(chunks: Chunk[], embeddings: number[][]): void {
-    const { indexFile, embeddingsFile } = config.paths;
-    if (existsSync(indexFile)) writeFileSync(indexFile, JSON.stringify({ version: 2, dims: this.dims, chunks: [] }));
-    if (existsSync(embeddingsFile)) writeFileSync(embeddingsFile, Buffer.alloc(0));
-    this.chunks = [];
-    this.embeddings = new Float32Array(0);
-    this.loaded = true;
-    this.appendChunks(chunks, embeddings);
+    if (chunks.length !== embeddings.length) {
+      throw new StoreCorruptedError('replaceAll: chunks y embeddings no coinciden');
+    }
+    this.writeIndex(chunks, embeddings);
   }
 }
 
@@ -279,7 +379,6 @@ export const store = new Store();
 
 /** Estadísticas agregadas del índice + carpeta de scrapeo (para la UI). */
 export function getStats(): StoreStats {
-  store.load();
   const chunks = store.getAllChunks();
 
   let scrapedFiles = 0;

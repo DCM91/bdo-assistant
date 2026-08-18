@@ -34,8 +34,17 @@ export interface StatsDto {
   bySource: Record<string, number>;
 }
 
+export interface IndexedPageDto {
+  url: string;
+  title: string;
+  source: string;
+  scraped_at: string;
+  chunks: number;
+}
+
 const api = {
-  ask: (question: string): Promise<void> => ipcRenderer.invoke('question:ask', question),
+  ask: (question: string, opts?: { locale?: string }): Promise<void> =>
+    ipcRenderer.invoke('question:ask', { question, locale: opts?.locale }),
   onToken: (cb: (token: string) => void): void => {
     ipcRenderer.on('stream-token', (_e, token: string) => cb(token));
   },
@@ -64,6 +73,13 @@ const api = {
   onScrapeError: (cb: (msg: string) => void): void => {
     ipcRenderer.on('scrape:error', (_e, msg: string) => cb(msg));
   },
+  onScrapeCancelled: (cb: () => void): void => {
+    ipcRenderer.on('scrape:cancelled', () => cb());
+  },
+  listPages: (): Promise<IndexedPageDto[]> => ipcRenderer.invoke('pages:list'),
+  deletePage: (url: string): Promise<{ ok: boolean; removed?: number; error?: string }> =>
+    ipcRenderer.invoke('pages:delete', url),
+  exportPagesCsv: (): Promise<string> => ipcRenderer.invoke('pages:export'),
 };
 
 export type BdoApi = typeof api;

@@ -1,5 +1,11 @@
 import { config } from './config';
 import { IndexEmptyError } from './errors';
+import {
+  DEFAULT_LOCALE,
+  SUPPORTED_LOCALES,
+  TRANSLATIONS,
+  type Locale,
+} from './i18n/locales';
 import { chat, chatStream, embed } from './ollama';
 import { retrieve } from './retriever';
 import { queryEmbeddingCache, store } from './store';
@@ -8,6 +14,18 @@ import type { RerankStrategy } from './types';
 
 export interface QueryOptions {
   rerank?: RerankStrategy;
+  locale?: string;
+}
+
+function resolveLocale(value: string | undefined): Locale {
+  if (value && (SUPPORTED_LOCALES as readonly string[]).includes(value)) {
+    return value as Locale;
+  }
+  return DEFAULT_LOCALE;
+}
+
+function tFor(locale: Locale, key: string): string {
+  return TRANSLATIONS[locale][key] ?? TRANSLATIONS[DEFAULT_LOCALE][key] ?? key;
 }
 
 interface RetrievalOutcome {
@@ -21,7 +39,10 @@ interface RetrievalOutcome {
 }
 
 /** Etapas 1-2 del pipeline: embedding (con caché) + recuperación + re-ranking. */
-async function runRetrieval(question: string, options: QueryOptions): Promise<RetrievalOutcome> {
+async function runRetrieval(
+  question: string,
+  options: QueryOptions,
+): Promise<RetrievalOutcome> {
   const tEmbed0 = Date.now();
   let questionEmbedding = queryEmbeddingCache.get(question);
   const cached = questionEmbedding !== null;
@@ -42,8 +63,12 @@ async function runRetrieval(question: string, options: QueryOptions): Promise<Re
   return { questionEmbedding, embedMs, cached, chunks, rerankMs, searchMs, strategyUsed };
 }
 
-/** Construye los prompts del sistema y usuario con el contexto numerado. */
-function buildPrompts(question: string, chunks: ScoredChunk[]): { systemPrompt: string; userPrompt: string } {
+/** Construye los prompts del sistema y usuario con el contexto numerado y el idioma activo. */
+function buildPrompts(
+  question: string,
+  chunks: ScoredChunk[],
+  locale: Locale,
+): { systemPrompt: string; userPrompt: string } {
   const context = chunks
     .map((c, i) => {
       const date = c.scraped_at ? c.scraped_at.split('T')[0] : 'desconocida';
@@ -51,15 +76,12 @@ function buildPrompts(question: string, chunks: ScoredChunk[]): { systemPrompt: 
     })
     .join('\n\n');
 
-  const systemPrompt = `Eres un asistente experto en Black Desert Online (BDO).
-Responde ÚNICAMENTE basándote en la información proporcionada a continuación.
-REGLAS OBLIGATORIAS:
-- Cada afirmación importante debe terminar con la cita de su fuente: [ref:N] (N = número de fuente).
-- Si la información no es suficiente para responder, dilo claramente en lugar de inventar.
-- Menciona la fecha de los datos cuando sea relevante.
-- Responde en español, de forma clara y directa.`;
+  const systemPrompt = tFor(locale, 'query.systemPrompt');
 
-  const userPrompt = `INFORMACIÓN DISPONIBLE:\n\n${context}\n\nPREGUNTA: ${question}\n\nRESPUESTA (basada solo en la información anterior, en español, con citas [ref:N]):`;
+  const userPrompt =
+    `${tFor(locale, 'query.userPromptBefore')}\n\n${context}\n\n` +
+    `${tFor(locale, 'query.userPromptQuestion')} ${question}\n\n` +
+    `${tFor(locale, 'query.userPromptAfter')}`;
 
   return { systemPrompt, userPrompt };
 }
@@ -71,13 +93,14 @@ function finalizeResult(
   meta: Omit<QueryMeta, 'llmMs' | 'totalMs' | 'candidates'>,
   llmMs: number,
   totalMs: number,
+  locale: Locale,
 ): QueryResult {
   const hasCitations = /\[ref:\d+\]/.test(answer);
-  const bestCosine = chunks[0]?.score ?? 0;
+  const bestCosine = chunks[0]?.cosine ?? chunks[0]?.score ?? 0;
   const lowConfidence = !hasCitations || bestCosine < config.retriever.lowConfidenceThreshold;
 
   return {
-    answer: answer || 'No se pudo generar una respuesta.',
+    answer: answer || tFor(locale, 'query.fallbackAnswer'),
     sources: dedupeSources(
       chunks.map((c) => ({
         url: c.url,
@@ -95,12 +118,10 @@ function finalizeResult(
   };
 }
 
-function emptyResult(question: string, r: RetrievalOutcome, t0: number): QueryResult {
+function emptyResult(question: string, r: RetrievalOutcome, t0: number, locale: Locale): QueryResult {
   void question;
   return {
-    answer:
-      'No encontré información relevante en garmoth.com para tu pregunta. ' +
-      'Prueba reformularla o ejecuta /scrape para ampliar la base de datos.',
+    answer: tFor(locale, 'query.emptyResult'),
     sources: [],
     meta: {
       embedMs: r.embedMs,
@@ -126,15 +147,25 @@ function emptyResult(question: string, r: RetrievalOutcome, t0: number): QueryRe
  */
 export async function query(question: string, options: QueryOptions = {}): Promise<QueryResult> {
   const t0 = Date.now();
+  const locale = resolveLocale(options.locale);
 
   if (store.isEmpty()) {
-    throw new IndexEmptyError('No hay datos indexados. Ejecuta /scrape primero para obtener información de garmoth.com.');
+    throw new IndexEmptyError(
+      locale === 'es'
+        ? 'No hay datos indexados. Ejecuta /scrape primero.'
+        : locale === 'pt'
+          ? 'Não há dados indexados. Execute /scrape primeiro.'
+          : 'No indexed data. Run /scrape first.',
+    );
   }
 
   const r = await runRetrieval(question, options);
-  if (r.chunks.length === 0) return emptyResult(question, r, t0);
+  if (r.chunks.length === 0) return emptyResult(question, r, t0, locale);
 
-  const { systemPrompt, userPrompt } = buildPrompts(question, r.chunks);
+  // Deduplicamos por canonical_url antes de numerar las fuentes en el prompt,
+  // para que `[ref:N]` apunte a la misma URL que se mostrará después.
+  const chunks = dedupeChunksByCanonical(r.chunks);
+  const { systemPrompt, userPrompt } = buildPrompts(question, chunks, locale);
 
   const tLlm0 = Date.now();
   const answer = await chat(
@@ -148,7 +179,7 @@ export async function query(question: string, options: QueryOptions = {}): Promi
 
   return finalizeResult(
     answer,
-    r.chunks,
+    chunks,
     {
       embedMs: r.embedMs,
       searchMs: r.searchMs,
@@ -159,6 +190,7 @@ export async function query(question: string, options: QueryOptions = {}): Promi
     },
     llmMs,
     Date.now() - t0,
+    locale,
   );
 }
 
@@ -172,15 +204,25 @@ export async function queryStream(
   options: QueryOptions = {},
 ): Promise<QueryResult> {
   const t0 = Date.now();
+  const locale = resolveLocale(options.locale);
 
   if (store.isEmpty()) {
-    throw new IndexEmptyError('No hay datos indexados. Ejecuta /scrape primero para obtener información de garmoth.com.');
+    throw new IndexEmptyError(
+      locale === 'es'
+        ? 'No hay datos indexados. Ejecuta /scrape primero.'
+        : locale === 'pt'
+          ? 'Não há dados indexados. Execute /scrape primeiro.'
+          : 'No indexed data. Run /scrape first.',
+    );
   }
 
   const r = await runRetrieval(question, options);
-  if (r.chunks.length === 0) return emptyResult(question, r, t0);
+  if (r.chunks.length === 0) return emptyResult(question, r, t0, locale);
 
-  const { systemPrompt, userPrompt } = buildPrompts(question, r.chunks);
+  // Mismo dedup por canonical_url que en query(): si dos chunks comparten URL,
+  // el LLM no debe citarlos con dos `[ref:N]` distintos.
+  const chunks = dedupeChunksByCanonical(r.chunks);
+  const { systemPrompt, userPrompt } = buildPrompts(question, chunks, locale);
 
   const tLlm0 = Date.now();
   let accumulated = '';
@@ -199,7 +241,7 @@ export async function queryStream(
 
   return finalizeResult(
     accumulated,
-    r.chunks,
+    chunks,
     {
       embedMs: r.embedMs,
       searchMs: r.searchMs,
@@ -210,6 +252,7 @@ export async function queryStream(
     },
     llmMs,
     Date.now() - t0,
+    locale,
   );
 }
 
@@ -221,6 +264,24 @@ function dedupeSources(sources: Source[]): Source[] {
     seen.add(s.url);
     return true;
   });
+}
+
+/**
+ * Reduce los chunks para que cada `canonical_url` aparezca una sola vez, quedándose
+ * con el de mayor score (más relevante). Mantiene el orden original del input.
+ * Fundamental para que las citas `[ref:N]` del prompt apunten a las mismas
+ * URLs que después se mostrarán en la UI.
+ *
+ * @internal — exportada para tests.
+ */
+export function dedupeChunksByCanonical(chunks: ScoredChunk[]): ScoredChunk[] {
+  const bestByCanonical = new Map<string, ScoredChunk>();
+  for (const c of chunks) {
+    const key = c.canonical_url || c.url;
+    const prev = bestByCanonical.get(key);
+    if (!prev || c.score > prev.score) bestByCanonical.set(key, c);
+  }
+  return chunks.filter((c) => bestByCanonical.get(c.canonical_url || c.url) === c);
 }
 
 if (require.main === module) {

@@ -38,7 +38,7 @@ export function startScrape(opts: ScrapeOptions): ScrapeHandle {
   let proc: ChildProcessWithoutNullStreams;
   try {
     proc = spawn(process.execPath, [scraperJs, ...args], {
-      cwd: path.dirname(config.paths.root),
+      cwd: config.paths.root,
       env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
     }) as ChildProcessWithoutNullStreams;
   } catch (e) {
@@ -89,10 +89,16 @@ export function startScrape(opts: ScrapeOptions): ScrapeHandle {
     }
   });
 
+  let stderrBuf = '';
   proc.stderr.setEncoding('utf-8');
   proc.stderr.on('data', (chunk: string) => {
-    const lines = chunk.split(/\r?\n/).filter(Boolean);
-    for (const line of lines) opts.onLine('[stderr] ' + line, 'error');
+    stderrBuf += chunk;
+    let nl: number;
+    while ((nl = stderrBuf.indexOf('\n')) >= 0) {
+      const line = stderrBuf.slice(0, nl).trimEnd();
+      stderrBuf = stderrBuf.slice(nl + 1);
+      if (line) opts.onLine('[stderr] ' + line, 'error');
+    }
   });
 
   proc.on('error', (e) => {
@@ -103,7 +109,12 @@ export function startScrape(opts: ScrapeOptions): ScrapeHandle {
   });
 
   proc.on('close', (code) => {
-    if (cancelled) return;
+    // Vaciar resto del buffer de stderr si lo hay.
+    const tail = stderrBuf.trim();
+    if (tail) opts.onLine('[stderr] ' + tail, 'error');
+    stderrBuf = '';
+
+    if (cancelled) return; // Cancelación del usuario: silencio, no error.
     if (resolved) return;
     if (code === 0) {
       // El scraper salió sin emitir la línea final (raro). Asumimos pagesScraped=0.
@@ -117,6 +128,7 @@ export function startScrape(opts: ScrapeOptions): ScrapeHandle {
 
   return {
     cancel: () => {
+      if (cancelled) return; // Idempotente: segunda llamada no hace nada.
       cancelled = true;
       try {
         proc.kill('SIGTERM');
@@ -124,7 +136,12 @@ export function startScrape(opts: ScrapeOptions): ScrapeHandle {
         /* ignore */
       }
       // En Windows SIGTERM no siempre funciona; fallback con taskkill
-      if (process.platform === 'win32') {
+      // solo si el proceso sigue vivo (exitCode null) y tenemos PID real.
+      if (
+        process.platform === 'win32' &&
+        proc.pid !== undefined &&
+        proc.exitCode === null
+      ) {
         try {
           const { execSync } = require('child_process') as typeof import('child_process');
           execSync(`taskkill /pid ${proc.pid} /T /F 2>nul`, { stdio: 'ignore' });
@@ -132,7 +149,8 @@ export function startScrape(opts: ScrapeOptions): ScrapeHandle {
           /* ignore */
         }
       }
-      opts.onError('Scrape cancelado por el usuario.');
+      // NO llamamos a opts.onError: la UI distingue cancelación de error
+      // vía el evento 'scrape:cancelled' que emite main.ts.
     },
   };
 }

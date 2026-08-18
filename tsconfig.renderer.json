@@ -11,7 +11,8 @@
     "declaration": false,
     "sourceMap": false,
     "noImplicitAny": true,
-    "strictNullChecks": true
+    "strictNullChecks": true,
+    "types": []
   },
   "include": ["src/ui/renderer/renderer.ts"]
 }

@@ -1,10 +1,25 @@
 import { app, BrowserWindow, ipcMain, shell } from 'electron';
 import * as path from 'path';
-import { existsSync, readFileSync } from 'fs';
+import { existsSync, readFileSync, mkdirSync, copyFileSync } from 'fs';
 
-// ANTES de cargar el RAG: en la app empaquetada, data/ vive en resources
+// ANTES de cargar el RAG: en la app empaquetada, data/ vive en userData para que
+// el re-scraping no se pierda al instalar actualizaciones. Sembramos desde
+// resourcesPath la primera vez.
 if (app.isPackaged) {
-  process.env.BDO_DATA_DIR = path.join(process.resourcesPath, 'data');
+  const userDataDir = path.join(app.getPath('userData'), 'data');
+  const seedDir = path.join(process.resourcesPath, 'data');
+  if (!existsSync(userDataDir)) {
+    try {
+      mkdirSync(userDataDir, { recursive: true });
+      for (const f of ['index.json', 'embeddings.bin']) {
+        const src = path.join(seedDir, f);
+        if (existsSync(src)) copyFileSync(src, path.join(userDataDir, f));
+      }
+    } catch {
+      /* sin seed: el primer scrape generará el índice */
+    }
+  }
+  process.env.BDO_DATA_DIR = userDataDir;
 }
 
 // ---------------------------------------------------------------------------
@@ -53,12 +68,22 @@ interface RagModule {
   queryStream(
     question: string,
     onToken: (token: string) => void,
-    options?: { rerank?: RerankStrategy },
+    options?: { rerank?: RerankStrategy; locale?: string },
   ): Promise<QueryResultDto>;
+}
+
+interface IndexedPageDto {
+  url: string;
+  title: string;
+  source: string;
+  scraped_at: string;
+  chunks: number;
 }
 
 interface StoreModule {
   getStats(): StatsDto;
+  getIndexedPages(): IndexedPageDto[];
+  removeByUrl(url: string): number;
 }
 
 interface ScrapeRunnerModule {
@@ -77,8 +102,29 @@ interface ScrapeRunnerModule {
 }
 
 const { queryStream } = require(path.join(__dirname, '..', 'dist', 'query.js')) as RagModule;
-const { getStats } = require(path.join(__dirname, '..', 'dist', 'store.js')) as StoreModule;
+const { getStats, getIndexedPages: indexedPages, removeByUrl } = require(path.join(__dirname, '..', 'dist', 'store.js')) as StoreModule;
 const { startScrape } = require(path.join(__dirname, '..', 'dist', 'scrape-runner.js')) as ScrapeRunnerModule;
+
+/** Mensajes cortos de UI del main process, localizados. */
+function busyMessage(locale: string | undefined, kind: 'busy' | 'empty'): string {
+  const es = { busy: 'Ya hay una consulta en curso. Espera a que termine.', empty: 'Pregunta vacía.' };
+  const en = { busy: 'A query is already in progress. Please wait.', empty: 'Empty question.' };
+  const pt = { busy: 'Já há uma consulta em curso. Aguarde.', empty: 'Pergunta vazia.' };
+  if (locale === 'en') return en[kind];
+  if (locale === 'pt') return pt[kind];
+  return es[kind];
+}
+
+function pagesCsv(): string {
+  const rows = indexedPages();
+  const header = ['url', 'title', 'source', 'scraped_at', 'chunks'];
+  const esc = (v: string): string => `"${v.replace(/"/g, '""')}"`;
+  const lines = [header.join(',')];
+  for (const r of rows) {
+    lines.push([esc(r.url), esc(r.title), esc(r.source), esc(r.scraped_at), String(r.chunks)].join(','));
+  }
+  return lines.join('\n');
+}
 
 let mainWindow: BrowserWindow | null = null;
 let rerankMode: RerankStrategy = 'judge';
@@ -107,10 +153,25 @@ function createWindow(): void {
 
   void mainWindow.loadFile(path.join(__dirname, '..', 'dist-renderer', 'index.html'));
 
+  // Solo permitimos abrir enlaces http(s) en el navegador del sistema.
+  const openExternalIfAllowed = (url: string): void => {
+    if (url.startsWith('http://') || url.startsWith('https://')) {
+      void shell.openExternal(url);
+    }
+  };
+
   // Abrir enlaces externos en el navegador del sistema, nunca en Electron
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    void shell.openExternal(url);
+    openExternalIfAllowed(url);
     return { action: 'deny' };
+  });
+
+  // Evita que un clic en un enlace (de fuentes o del LLM) navegue la ventana
+  // principal de la app a una URL remota arbitraria.
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    if (url.startsWith('file://')) return;
+    event.preventDefault();
+    openExternalIfAllowed(url);
   });
 
   mainWindow.on('closed', () => {
@@ -125,13 +186,16 @@ function send(channel: string, ...args: unknown[]): void {
 }
 
 function registerIpc(): void {
-  ipcMain.handle('question:ask', async (_event, question: string) => {
+  ipcMain.handle('question:ask', async (_event, payload: { question: string; locale?: string }) => {
+    const question = typeof payload === 'string' ? payload : payload?.question;
+    const locale = typeof payload === 'object' && payload ? payload.locale : undefined;
+
     if (asking) {
-      send('stream-error', 'Ya hay una consulta en curso. Espera a que termine.');
+      send('stream-error', busyMessage(locale, 'busy'));
       return;
     }
     if (typeof question !== 'string' || question.trim().length === 0) {
-      send('stream-error', 'Pregunta vacía.');
+      send('stream-error', busyMessage(locale, 'empty'));
       return;
     }
 
@@ -140,7 +204,7 @@ function registerIpc(): void {
       const result = await queryStream(
         question.trim(),
         (token) => send('stream-token', token),
-        { rerank: rerankMode },
+        { rerank: rerankMode, locale },
       );
       send('stream-done', {
         sources: result.sources,
@@ -155,6 +219,25 @@ function registerIpc(): void {
   });
 
   ipcMain.handle('stats:get', () => getStats());
+
+  ipcMain.handle('pages:list', () => {
+    try {
+      return indexedPages();
+    } catch (e) {
+      return [];
+    }
+  });
+
+  ipcMain.handle('pages:delete', (_event, url: string) => {
+    try {
+      const removed = removeByUrl(url);
+      return { ok: true, removed };
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    }
+  });
+
+  ipcMain.handle('pages:export', () => pagesCsv());
 
   ipcMain.handle('rerank:set', (_event, mode: string) => {
     if (mode === 'judge' || mode === 'mmr' || mode === 'none') {
@@ -196,6 +279,7 @@ function registerIpc(): void {
       currentScrapeHandle.cancel();
       currentScrapeHandle = null;
       scraping = false;
+      send('scrape:cancelled');
     }
   });
 }
@@ -233,15 +317,43 @@ function getWallpaperDataUrl(): string | null {
   }
 }
 
-app.whenReady().then(() => {
-  registerIpc();
-  createWindow();
-
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
-  });
-});
-
-app.on('window-all-closed', () => {
+const gotLock = app.requestSingleInstanceLock();
+if (!gotLock) {
   app.quit();
-});
+} else {
+  app.on('second-instance', () => {
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.focus();
+    }
+  });
+
+  app.on('window-all-closed', () => {
+    app.quit();
+  });
+
+  app.on('before-quit', () => {
+    if (currentScrapeHandle) {
+      try {
+        currentScrapeHandle.cancel();
+      } catch {
+        /* noop */
+      }
+      currentScrapeHandle = null;
+    }
+  });
+
+  app.whenReady()
+    .then(() => {
+      registerIpc();
+      createWindow();
+
+      app.on('activate', () => {
+        if (BrowserWindow.getAllWindows().length === 0) createWindow();
+      });
+    })
+    .catch((e) => {
+      console.error(e instanceof Error ? e.message : e);
+      app.quit();
+    });
+}

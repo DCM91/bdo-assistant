@@ -20,7 +20,8 @@ extraResources:
   - from: data
     to: data
     filter:
-      - "**/*"
+      - "index.json"
+      - "embeddings.bin"
   - from: ui/build/wallpaper.jpg
     to: wallpaper.jpg
     filter:

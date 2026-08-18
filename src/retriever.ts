@@ -36,6 +36,13 @@ export async function retrieve(
   let reranked: ScoredChunk[];
   let strategyUsed: string = strategy;
 
+  // Cuando el rerank sustituye `score` por juez/MMR, conservamos el coseno puro
+  // en `cosine` para que el umbral de `lowConfidence` siga siendo comparable.
+  const needsCosinePreserve = strategy === 'judge' || strategy === 'mmr';
+  if (needsCosinePreserve) {
+    for (const c of candidates) c.cosine = c.score;
+  }
+
   if (strategy === 'judge') {
     const scores = await judgeRelevance(
       question,
@@ -47,7 +54,7 @@ export async function retrieve(
         .sort((a, b) => b.score - a.score)
         .slice(0, topFinal);
     } else {
-      // Fallback: el judge falló → orden por coseno
+      // Fallback: el judge falló → orden por coseno (score aún es coseno).
       reranked = candidates.slice(0, topFinal);
       strategyUsed = 'none (judge falló)';
     }
@@ -63,9 +70,18 @@ export async function retrieve(
 /**
  * Maximal Marginal Relevance: equilibra relevancia (coseno con la query)
  * y diversidad (penaliza chunks muy similares a los ya seleccionados).
+ *
+ * El parámetro `lambda` se puede pasar en tests para verificar los extremos
+ * (1 = solo relevancia, 0 = solo diversidad).
+ *
+ * @internal — exportada para tests.
  */
-function mmr(candidates: ScoredChunk[], queryEmbedding: number[], k: number): ScoredChunk[] {
-  const lambda = config.retriever.mmrLambda;
+export function mmr(
+  candidates: ScoredChunk[],
+  queryEmbedding: number[],
+  k: number,
+  lambda: number = config.retriever.mmrLambda,
+): ScoredChunk[] {
   const selected: ScoredChunk[] = [];
   const remaining = [...candidates];
 

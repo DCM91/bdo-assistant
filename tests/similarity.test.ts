@@ -37,6 +37,18 @@ test('cosineSimilarityRow fuera de rango devuelve 0', () => {
   assert.equal(cosineSimilarityRow([1, 2, 3], matrix, 5, 3), 0);
 });
 
+test('cosineSimilarityRow con queryNorm precomputado da mismo resultado', () => {
+  // Esta es la forma en que se invoca en producción (store.ts scoreAll):
+  // pasamos la norma ya calculada para evitar recalcularla N veces.
+  const dims = 3;
+  const matrix = new Float32Array([1, 0, 0, 0, 1, 0, 1, 1, 0]);
+  const query = [1, 1, 0];
+  const qNorm = Math.sqrt(2);
+  const withNorm = cosineSimilarityRow(query, matrix, 2, dims, qNorm);
+  const withoutNorm = cosineSimilarityRow(query, matrix, 2, dims);
+  assert.ok(Math.abs(withNorm - withoutNorm) < 1e-9);
+});
+
 test('l2Norm', () => {
   assert.ok(Math.abs(l2Norm([3, 4]) - 5) < 1e-9);
   assert.equal(l2Norm([0, 0]), 0);

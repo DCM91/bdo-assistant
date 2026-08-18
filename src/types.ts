@@ -47,6 +47,11 @@ export interface ScoredChunk extends Chunk {
   score: number;
   /** Posición en el store (fila de embeddings). */
   pos: number;
+  /**
+   * Coseno original previo al re-ranking. Cuando el rerank (judge/MMR) sobrescribe
+   * `score`, este campo conserva el coseno puro para el umbral de `lowConfidence`.
+   */
+  cosine?: number;
 }
 
 /** Fuente citada en la respuesta. */
