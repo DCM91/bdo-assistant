@@ -1,7 +1,7 @@
 {
   "name": "bdo-assistant",
   "version": "2.0.0",
-  "description": "Asistente local de Black Desert Online con datos de garmoth.com + Ollama",
+  "description": "Local-first RAG chatbot for Black Desert Online, powered by Ollama.",
   "main": "dist-ui/main.js",
   "scripts": {
     "clean": "node -e \"const fs=require('fs');for (const d of ['dist','dist-ui','dist-renderer','dist-installer']) fs.rmSync(d,{recursive:true,force:true});\"",
@@ -21,9 +21,25 @@
     "ui:pack": "npm run build && npm run build:ui && npm run wallpaper && npm run icon && electron-builder --win nsis --publish never",
     "test": "tsx --test tests/**/*.test.ts"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "keywords": [
+    "bdo",
+    "black-desert-online",
+    "rag",
+    "ollama",
+    "electron",
+    "local-first",
+    "llm"
+  ],
+  "author": "DCM91",
+  "license": "MIT",
+  "homepage": "https://github.com/DCM91/bdo-assistant#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/DCM91/bdo-assistant.git"
+  },
+  "bugs": {
+    "url": "https://github.com/DCM91/bdo-assistant/issues"
+  },
   "type": "commonjs",
   "engines": {
     "node": ">=22"
